@@ -9,8 +9,8 @@ This app uses the following
 
 
 # REQUIRED Docker Variables
-*  	`-v APP_DATA` set this to where you want the audio files to be downloaded to
-*  	`-e GOOGLE_API_KEY` set this to your google api v3 key
+*  	`-v config:/{audio download path here}` set this to where you want the audio files to be downloaded to
+*  	`-e GOOGLE_API_KEY=` set this to your google api v3 key
 *  	Example docker run command `docker run -p 8080:8080 -e GOOGLE_API_KEY={api key here} -v /config:/{audio download path here}  go-podcast-sponsor-block`
 
 
