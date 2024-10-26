@@ -1,4 +1,3 @@
-
 # GO Podcast Sponsorblock RSS
 
   
@@ -17,19 +16,19 @@ This app uses the following
 # Docker Variables
 |Variable| Description | Required |
 |--|--|--|
-| `-v config:/` | Where the audio files will be stored | Yes |
-| `-e GOOGLE_API_KEY` | YouTube v3 API Key | Yes |
-| `-e TOKEN` | Used for securing the endpoints. If using this you must add the query param `token` to the end of the URL for the `/rss` endpoint request ex.`?token=mySecureToken` | No |
-| `-e TRUSTED_HOSTS` | If you want to limit what host this service can be called from. Can be a list of hosts separated by a `,` Ex: `localhost:8080,https://podcast.com` | No |
+| `-v config:/<container path>` | Where the audio files will be stored | Yes |
+| `-e GOOGLE_API_KEY=<api key>` | YouTube v3 API Key | Yes |
+| `-e TOKEN=<secure key>` | Used for securing the endpoints. If using this you must add the query param `token` to the end of the URL for the `/rss` endpoint request ex.`?token=mySecureToken` | No |
+| `-e TRUSTED_HOSTS=<list of hosts>` | If you want to limit what host this service can be called from. Can be a list of hosts separated by a `,` Ex: `localhost:8080,https://podcast.com` | No |
 
 ## Docker Run Command Templates
 > Docker run command (only required parameters)
 
-    docker run -p 8080:8080 -e GOOGLE_API_KEY={api key here} -v /config:/{audio download path here} ikoyhn/go-podcast-sponsor-block
+    docker run -p 8080:8080 -e GOOGLE_API_KEY=<api key here> -v /config:/<audio download path here> ikoyhn/go-podcast-sponsor-block
     
 > Docker run command (all parameters)
 
-    docker run -p 8080:8080 -e GOOGLE_API_KEY={api key here} -v /config:/{audio download path here} -e TRUSTED_HOSTS={add hosts here} -e TOKEN={add secure token here} ikoyhn/go-podcast-sponsor-block
+    docker run -p 8080:8080 -e GOOGLE_API_KEY=<api key here> -v /config:/<audio download path here> -e TRUSTED_HOSTS=<add hosts here> -e TOKEN=<add secure token here> ikoyhn/go-podcast-sponsor-block
 
 
   
@@ -44,7 +43,7 @@ This app uses the following
 2. Once you have the ID add the the ID to the end of the main endpoint ie. `{url this is running on}/rss/{id of playlist}`
 
 * Following the TigerBelly example where this app is running on `http://localhost:8080` the url would be `http://localhost:8080/rss/PLbh0Jamvptwfp_qc439PLuyKJ-tWUt222`
-	* **NOTE:** If you have the docker var `-e TOKEN` set you must add the token as a query param to this url. Ex: `http://localhost:8080/rss/PLbh0Jamvptwfp_qc439PLuyKJ-tWUt222?token=secureToken`
+	* **NOTE:** If you have the docker var `-e TOKEN=<secure token>` set you must add the token as a query param to this url. Ex: `http://localhost:8080/rss/PLbh0Jamvptwfp_qc439PLuyKJ-tWUt222?token=secureToken`
 
 3. With this URL you can now add this to any of your favorite podcast apps that accept custom RSS feeds (Apple Podcasts app, VLC Media Player, etc)
 
