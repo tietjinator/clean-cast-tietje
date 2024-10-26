@@ -1,15 +1,21 @@
 package app
 
 import (
+	"bytes"
+	"context"
+	"fmt"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	log "github.com/labstack/gommon/log"
+	"github.com/lrstanley/go-ytdlp"
+	"gorm.io/gorm"
 	setup "ikoyhn/podcast-sponsorblock/internal/database"
 	"ikoyhn/podcast-sponsorblock/internal/services"
 	"net/http"
 	"os"
-
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	log "github.com/labstack/gommon/log"
-	"gorm.io/gorm"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type Env struct {
@@ -17,6 +23,9 @@ type Env struct {
 }
 
 func Start() {
+
+	ytdlp.MustInstall(context.TODO(), nil)
+
 	db, err := setup.ConnectDatabase()
 	if err != nil {
 		log.Panic(err)
@@ -31,13 +40,82 @@ func Start() {
 }
 
 func (env *Env) registerRoutes(e *echo.Echo) {
-	e.GET("/rss/:youtubePlaylistId", func(c echo.Context) error {
+	// Define the trusted hosts
+	trustedHosts := strings.Split(os.Getenv("TRUSTED_HOSTS"), ",")
+
+	// Define the authentication credentials
+	username := os.Getenv("USERNAME")
+	password := os.Getenv("PASSWORD")
+	authEnabled := os.Getenv("AUTH_ENABLED") == "true"
+
+	// Create a custom middleware to check the request's Host header
+	middlewareFunc := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if authEnabled {
+				host := c.Request().Host
+				if !contains(trustedHosts, host) {
+					return echo.NewHTTPError(http.StatusForbidden, "Forbidden")
+				}
+			}
+			return next(c)
+		}
+	}
+	// Create a middleware to authenticate the user using basic auth
+	authMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if username != "" && password != "" {
+				user, pass, ok := c.Request().BasicAuth()
+				if !ok || user != username || pass != password {
+					return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+				}
+			}
+			return next(c)
+		}
+	}
+
+	e.GET("/rss/:youtubePlaylistId", middlewareFunc(authMiddleware(func(c echo.Context) error {
 		data := services.BuildRssFeed(env.db, c, c.Param("youtubePlaylistId"))
-		return c.JSON(http.StatusOK, data)
-	})
-	e.GET("/media/:youtubeVideoId", func(c echo.Context) error {
-		return services.GetYoutubeVideo(c.Param("youtubeVideoId"), c)
-	})
+		c.Response().Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+		c.Response().Header().Set("Content-Length", strconv.Itoa(len(data)))
+		c.Response().Header().Del("Transfer-Encoding")
+		return c.Blob(http.StatusOK, "application/rss+xml; charset=utf-8", data)
+	})))
+
+	e.Match([]string{"GET", "HEAD"}, "/media/:youtubeVideoId", middlewareFunc(authMiddleware(func(c echo.Context) error {
+		fileName, done := services.GetYoutubeVideo(c.Param("youtubeVideoId"))
+		<-done
+
+		file, err := os.Open("/config/" + fileName + ".m4a")
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to open file: /config/"+fileName+".m4a")
+		}
+		defer file.Close()
+
+		fileInfo, err := file.Stat()
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file info")
+		}
+
+		c.Response().Header().Set("Connection", "close")
+		c.Response().Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s", fileName+".m4a"))
+		c.Response().Header().Set("Content-Type", "audio/mp4")
+		c.Response().Header().Set("Content-Length", strconv.Itoa(int(fileInfo.Size())))
+		c.Response().Header().Set("Last-Modified", fileInfo.ModTime().Format(time.RFC1123))
+		c.Response().Header().Set("Cache-Control", "no-cache")
+		c.Response().Header().Set("ETag", strconv.FormatInt(fileInfo.ModTime().UnixNano(), 10))
+
+		if c.Request().Method == "HEAD" {
+			return nil
+		}
+
+		fileBytes := make([]byte, fileInfo.Size())
+		_, err = file.Read(fileBytes)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
+		}
+
+		return c.Stream(http.StatusOK, "audio/mp4", bytes.NewReader(fileBytes))
+	})))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -48,4 +126,13 @@ func (env *Env) registerRoutes(e *echo.Echo) {
 	log.Info("Starting server on " + host + ": " + port)
 	e.Logger.Fatal(e.Start(host + ":" + port))
 
+}
+
+func contains(s []string, str string) bool {
+	for _, v := range s {
+		if v == str {
+			return true
+		}
+	}
+	return false
 }
