@@ -34,60 +34,78 @@ func Start() {
 
 	e := echo.New()
 
-	e.Use(middleware.Logger())
-
+	// Create a custom logger middleware
+	setupLogging(e)
 	env.registerRoutes(e)
 }
 
-func (env *Env) registerRoutes(e *echo.Echo) {
-	// Define the trusted hosts
-	trustedHosts := strings.Split(os.Getenv("TRUSTED_HOSTS"), ",")
+func setupLogging(e *echo.Echo) {
+	//custom logging to exclude showing the token from url
+	if os.Getenv("TOKEN") != "" {
+		logger := middleware.LoggerConfig{
+			Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","path":"${uri.Path}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
+		}
+		e.Use(middleware.LoggerWithConfig(logger))
+	} else {
+		e.Use(middleware.Logger())
+	}
+}
 
-	// Define the authentication credentials
-	username := os.Getenv("USERNAME")
-	password := os.Getenv("PASSWORD")
-	authEnabled := os.Getenv("AUTH_ENABLED") == "true"
+func (env *Env) registerRoutes(e *echo.Echo) {
+	trustedHosts := strings.Split(os.Getenv("TRUSTED_HOSTS"), ",")
+	authKey := os.Getenv("TOKEN")
 
 	// Create a custom middleware to check the request's Host header
-	middlewareFunc := func(next echo.HandlerFunc) echo.HandlerFunc {
+	hostMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if authEnabled {
+			if trustedHosts != nil {
+				log.Info("[AUTH] Checking hosts...")
 				host := c.Request().Host
 				if !contains(trustedHosts, host) {
+					log.Error("[AUTH] Invalid host")
+
 					return echo.NewHTTPError(http.StatusForbidden, "Forbidden")
 				}
 			}
 			return next(c)
 		}
 	}
-	// Create a middleware to authenticate the user using basic auth
+
+
 	authMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if username != "" && password != "" {
-				user, pass, ok := c.Request().BasicAuth()
-				if !ok || user != username || pass != password {
+			if authKey != "" {
+				log.Info("[AUTH] Checking authentication...")
+				authHeader := c.Request().URL.Query().Get("token")
+				if authHeader == "" {
+					log.Error("[AUTH] Auth not found")
 					return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+				}
+				if authHeader != authKey {
+					log.Error("[AUTH] Auth not valid")
+					return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
 				}
 			}
 			return next(c)
 		}
 	}
 
-	e.GET("/rss/:youtubePlaylistId", middlewareFunc(authMiddleware(func(c echo.Context) error {
-		data := services.BuildRssFeed(env.db, c, c.Param("youtubePlaylistId"))
+	e.GET("/rss/:youtubePlaylistId", authMiddleware(hostMiddleware(func(c echo.Context) error {
+		data := services.BuildRssFeed(env.db, c.Param("youtubePlaylistId"), handler(c.Request()))
 		c.Response().Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
 		c.Response().Header().Set("Content-Length", strconv.Itoa(len(data)))
 		c.Response().Header().Del("Transfer-Encoding")
 		return c.Blob(http.StatusOK, "application/rss+xml; charset=utf-8", data)
 	})))
 
-	e.Match([]string{"GET", "HEAD"}, "/media/:youtubeVideoId", middlewareFunc(authMiddleware(func(c echo.Context) error {
+
+	e.Match([]string{"GET", "HEAD"}, "/media/:youtubeVideoId", authMiddleware(hostMiddleware(func(c echo.Context) error {
 		fileName, done := services.GetYoutubeVideo(c.Param("youtubeVideoId"))
 		<-done
 
-		file, err := os.Open("/config/" + fileName + ".m4a")
+		file, err := os.Open("/config/audio/" + fileName + ".m4a")
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to open file: /config/"+fileName+".m4a")
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to open file: /config/audio/"+fileName+".m4a")
 		}
 		defer file.Close()
 
@@ -135,4 +153,16 @@ func contains(s []string, str string) bool {
 		}
 	}
 	return false
+}
+
+func handler(r *http.Request) string {
+	var scheme string
+	if r.TLS != nil {
+		scheme = "https"
+	} else {
+		scheme = "http"
+	}
+	host := r.Host
+	url := scheme + "://" + host
+	return url
 }
