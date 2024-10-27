@@ -36,6 +36,7 @@ func Start() {
 
 	// Create a custom logger middleware
 	setupLogging(e)
+	setupHandlers(e)
 	env.registerRoutes(e)
 }
 
@@ -52,54 +53,15 @@ func setupLogging(e *echo.Echo) {
 }
 
 func (env *Env) registerRoutes(e *echo.Echo) {
-	trustedHosts := strings.Split(os.Getenv("TRUSTED_HOSTS"), ",")
-	authKey := os.Getenv("TOKEN")
-
-	// Create a custom middleware to check the request's Host header
-	hostMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			if trustedHosts != nil {
-				log.Info("[AUTH] Checking hosts...")
-				host := c.Request().Host
-				if !contains(trustedHosts, host) {
-					log.Error("[AUTH] Invalid host")
-
-					return echo.NewHTTPError(http.StatusForbidden, "Forbidden")
-				}
-			}
-			return next(c)
-		}
-	}
-
-
-	authMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			if authKey != "" {
-				log.Info("[AUTH] Checking authentication...")
-				authHeader := c.Request().URL.Query().Get("token")
-				if authHeader == "" {
-					log.Error("[AUTH] Auth not found")
-					return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
-				}
-				if authHeader != authKey {
-					log.Error("[AUTH] Auth not valid")
-					return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
-				}
-			}
-			return next(c)
-		}
-	}
-
-	e.GET("/rss/:youtubePlaylistId", authMiddleware(hostMiddleware(func(c echo.Context) error {
+	e.GET("/rss/:youtubePlaylistId", func(c echo.Context) error {
 		data := services.BuildRssFeed(env.db, c.Param("youtubePlaylistId"), handler(c.Request()))
 		c.Response().Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
 		c.Response().Header().Set("Content-Length", strconv.Itoa(len(data)))
 		c.Response().Header().Del("Transfer-Encoding")
 		return c.Blob(http.StatusOK, "application/rss+xml; charset=utf-8", data)
-	})))
+	})
 
-
-	e.Match([]string{"GET", "HEAD"}, "/media/:youtubeVideoId", authMiddleware(hostMiddleware(func(c echo.Context) error {
+	e.Match([]string{"GET", "HEAD"}, "/media/:youtubeVideoId", func(c echo.Context) error {
 		fileName, done := services.GetYoutubeVideo(c.Param("youtubeVideoId"))
 		<-done
 
@@ -133,7 +95,7 @@ func (env *Env) registerRoutes(e *echo.Echo) {
 		}
 
 		return c.Stream(http.StatusOK, "audio/mp4", bytes.NewReader(fileBytes))
-	})))
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -144,6 +106,48 @@ func (env *Env) registerRoutes(e *echo.Echo) {
 	log.Info("Starting server on " + host + ": " + port)
 	e.Logger.Fatal(e.Start(host + ":" + port))
 
+}
+
+func setupHandlers(e *echo.Echo) {
+	hostMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if value, ok := os.LookupEnv("TRUSTED_HOSTS"); ok && value != "" {
+				log.Info("[AUTH] Checking hosts...")
+				host := c.Request().Host
+				if !contains(strings.Split(value, ","), host) {
+					log.Error("[AUTH] Invalid host")
+					return echo.NewHTTPError(http.StatusForbidden, "Forbidden")
+				}
+			}
+			return next(c)
+		}
+	}
+
+	authMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if value, ok := os.LookupEnv("TOKEN"); ok && value != "" {
+				log.Info("[AUTH] Checking authentication...")
+				authHeader := c.Request().URL.Query().Get("token")
+				if authHeader == "" {
+					log.Error("[AUTH] Auth not found")
+					return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+				}
+				if authHeader != value {
+					log.Error("[AUTH] Auth not valid")
+					return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
+				}
+			}
+			return next(c)
+		}
+	}
+
+	if value, ok := os.LookupEnv("TRUSTED_HOSTS"); ok && value != "" {
+		e.Use(hostMiddleware)
+	}
+
+	if value, ok := os.LookupEnv("TOKEN"); ok && value != "" {
+		e.Use(authMiddleware)
+	}
 }
 
 func contains(s []string, str string) bool {
