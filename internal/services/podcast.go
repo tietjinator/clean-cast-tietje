@@ -12,8 +12,6 @@ var (
 	maxResults = flag.Int64("max-results", 50, "Max YouTube results")
 )
 
-var UNAVAILABLE_STATUSES = []string{"private", "privacyStatusUnspecified"}
-
 func BuildRssFeed(db *gorm.DB, youtubePlaylistId string, host string) []byte {
 	log.Info("[RSS FEED] Building rss feed...")
 	ytData := getYoutubeData(youtubePlaylistId)

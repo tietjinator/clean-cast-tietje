@@ -24,6 +24,9 @@ func GenerateRssFeed(podcast models.Podcast, host string) []byte {
 
 	if podcast.PodcastEpisodes != nil {
 		for _, podcastEpisode := range podcast.PodcastEpisodes {
+			if podcastEpisode.EpisodeName == "Private video" || podcastEpisode.EpisodeDescription == "This video is private." {
+				continue
+			}
 			mediaUrl := host + "/media/" + podcastEpisode.YoutubeVideoId + ".m4a"
 
 			if os.Getenv("TOKEN") != "" {

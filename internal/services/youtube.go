@@ -9,7 +9,6 @@ import (
 	"google.golang.org/api/youtube/v3"
 	"net/http"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -60,10 +59,17 @@ func getYoutubeData(youtubePlaylistId string) []*youtube.PlaylistItem {
 
 // Remove unavailable youtube videos used during the RSS feed generation
 func cleanPlaylistItems(items []*youtube.PlaylistItem) []*youtube.PlaylistItem {
-	var cleanItems []*youtube.PlaylistItem
+	unavailableStatuses := map[string]bool{
+		"private":                  true,
+		"unlisted":                 true,
+		"privacyStatusUnspecified": true,
+	}
+	cleanItems := make([]*youtube.PlaylistItem, 0)
 	for _, item := range items {
-		if !slices.Contains(UNAVAILABLE_STATUSES, item.Status.PrivacyStatus) {
-			cleanItems = append(cleanItems, item)
+		if item.Status != nil {
+			if !unavailableStatuses[item.Status.PrivacyStatus] {
+				cleanItems = append(cleanItems, item)
+			}
 		}
 	}
 	return cleanItems
@@ -79,8 +85,12 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 	mutex.(*sync.Mutex).Lock()
 
 	// Check if the file is already being processed
-	filePath := "/config/" + youtubeVideoId + ".m4a"
+	filePath := "/config/audio/" + youtubeVideoId + ".m4a"
 	if _, err := os.Stat(filePath); err == nil {
+		// is being processed or already exists, it returns immediately. Otherwise, it
+		// proceeds to download the video as an audio file. The download process
+		// removes sponsor segments using SponsorBlock and converts the video to M4A
+		// format.
 		mutex.(*sync.Mutex).Unlock()
 		return youtubeVideoId, make(chan struct{})
 	}

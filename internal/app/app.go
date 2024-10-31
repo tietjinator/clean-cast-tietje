@@ -1,9 +1,7 @@
 package app
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	log "github.com/labstack/gommon/log"
@@ -15,7 +13,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Env struct {
@@ -61,40 +58,56 @@ func (env *Env) registerRoutes(e *echo.Echo) {
 		return c.Blob(http.StatusOK, "application/rss+xml; charset=utf-8", data)
 	})
 
-	e.Match([]string{"GET", "HEAD"}, "/media/:youtubeVideoId", func(c echo.Context) error {
-		fileName, done := services.GetYoutubeVideo(c.Param("youtubeVideoId"))
-		<-done
+	e.GET("/media/:youtubeVideoId", func(c echo.Context) error {
+		fileId := c.Param("youtubeVideoId")
+		file, err := os.Open("/config/audio/" + fileId)
+		if file == nil || err != nil {
+			fileName, done := services.GetYoutubeVideo(fileId)
+			<-done
+			file, err = os.Open("/config/audio/" + fileName + ".m4a")
+			if err != nil || file == nil {
+				return err
+			}
+			defer file.Close()
 
-		file, err := os.Open("/config/audio/" + fileName + ".m4a")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to open file: /config/audio/"+fileName+".m4a")
+			rangeHeader := c.Request().Header.Get("Range")
+			if rangeHeader != "" {
+				http.ServeFile(c.Response().Writer, c.Request(), "/config/audio/"+fileName+".m4a")
+				return nil
+			}
+			return c.Stream(http.StatusOK, "audio/mp4", file)
 		}
-		defer file.Close()
+
+		rangeHeader := c.Request().Header.Get("Range")
+		if rangeHeader != "" {
+			http.ServeFile(c.Response().Writer, c.Request(), "/config/audio/"+fileId)
+			return nil
+		}
+		return c.Stream(http.StatusOK, "audio/mp4", file)
+	})
+
+	e.HEAD("/media/:youtubeVideoId", func(c echo.Context) error {
+		fileId := c.Param("youtubeVideoId")
+		file, err := os.Open("/config/audio/" + fileId)
+		if file == nil || err != nil {
+			fileName, done := services.GetYoutubeVideo(fileId)
+			<-done
+			fileId = fileName
+			file, err := os.Open("/config/audio/" + fileName + ".m4a")
+			if err != nil || file == nil {
+				return err
+			}
+		}
 
 		fileInfo, err := file.Stat()
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file info")
+			return err
 		}
 
-		c.Response().Header().Set("Connection", "close")
-		c.Response().Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s", fileName+".m4a"))
+		c.Response().Header().Set("Accept-Ranges", "bytes")
 		c.Response().Header().Set("Content-Type", "audio/mp4")
 		c.Response().Header().Set("Content-Length", strconv.Itoa(int(fileInfo.Size())))
-		c.Response().Header().Set("Last-Modified", fileInfo.ModTime().Format(time.RFC1123))
-		c.Response().Header().Set("Cache-Control", "no-cache")
-		c.Response().Header().Set("ETag", strconv.FormatInt(fileInfo.ModTime().UnixNano(), 10))
-
-		if c.Request().Method == "HEAD" {
-			return nil
-		}
-
-		fileBytes := make([]byte, fileInfo.Size())
-		_, err = file.Read(fileBytes)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
-		}
-
-		return c.Stream(http.StatusOK, "audio/mp4", bytes.NewReader(fileBytes))
+		return nil
 	})
 
 	port := os.Getenv("PORT")
