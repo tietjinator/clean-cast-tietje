@@ -1,5 +1,3 @@
-# Still Under Development Expect Issues!
-
 # GO Podcast Sponsorblock RSS
 
   
@@ -74,3 +72,5 @@ This app uses the following
 8. If it is not present download the youtube video with audio only and with Sponsorblock category "sponsor" removed
 
 9. Serve the file back to the client
+
+# Please report any issues you run into!
