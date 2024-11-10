@@ -2,56 +2,38 @@ package app
 
 import (
 	"context"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	log "github.com/labstack/gommon/log"
-	"github.com/lrstanley/go-ytdlp"
-	"gorm.io/gorm"
-	setup "ikoyhn/podcast-sponsorblock/internal/database"
+	"ikoyhn/podcast-sponsorblock/internal/common"
+	"ikoyhn/podcast-sponsorblock/internal/database"
 	"ikoyhn/podcast-sponsorblock/internal/services"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-)
 
-type Env struct {
-	db *gorm.DB
-}
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	log "github.com/labstack/gommon/log"
+	"github.com/lrstanley/go-ytdlp"
+	"github.com/robfig/cron"
+)
 
 func Start() {
 
 	ytdlp.MustInstall(context.TODO(), nil)
-
-	db, err := setup.ConnectDatabase()
-	if err != nil {
-		log.Panic(err)
-	}
-	env := &Env{db: db}
-
 	e := echo.New()
 
-	// Create a custom logger middleware
+	database.ConnectDatabase()
+	database.TrackEpisodeFiles()
+
+	setupCron()
 	setupLogging(e)
 	setupHandlers(e)
-	env.registerRoutes(e)
+	registerRoutes(e)
 }
 
-func setupLogging(e *echo.Echo) {
-	//custom logging to exclude showing the token from url
-	if os.Getenv("TOKEN") != "" {
-		logger := middleware.LoggerConfig{
-			Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","path":"${uri.Path}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
-		}
-		e.Use(middleware.LoggerWithConfig(logger))
-	} else {
-		e.Use(middleware.Logger())
-	}
-}
-
-func (env *Env) registerRoutes(e *echo.Echo) {
+func registerRoutes(e *echo.Echo) {
 	e.GET("/rss/:youtubePlaylistId", func(c echo.Context) error {
-		data := services.BuildRssFeed(env.db, c.Param("youtubePlaylistId"), handler(c.Request()))
+		data := services.BuildRssFeed(c.Param("youtubePlaylistId"), handler(c.Request()))
 		c.Response().Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
 		c.Response().Header().Set("Content-Length", strconv.Itoa(len(data)))
 		c.Response().Header().Del("Transfer-Encoding")
@@ -59,10 +41,15 @@ func (env *Env) registerRoutes(e *echo.Echo) {
 	})
 
 	e.GET("/media/:youtubeVideoId", func(c echo.Context) error {
-		fileId := c.Param("youtubeVideoId")
-		file, err := os.Open("/config/audio/" + fileId)
-		if file == nil || err != nil {
-			fileName, done := services.GetYoutubeVideo(fileId)
+		fileName := c.Param("youtubeVideoId")
+		if !common.IsValidFilename(fileName) {
+			c.Error(echo.ErrNotFound)
+		}
+		file, err := os.Open("/config/audio/" + fileName)
+		needRedownload, totalTimeSkipped := services.DeterminePodcastDownload(fileName[:len(fileName)-4])
+		if file == nil || err != nil || needRedownload {
+			database.UpdateEpisodePlaybackHistory(fileName[:len(fileName)-4], totalTimeSkipped)
+			fileName, done := services.GetYoutubeVideo(fileName)
 			<-done
 			file, err = os.Open("/config/audio/" + fileName + ".m4a")
 			if err != nil || file == nil {
@@ -78,36 +65,13 @@ func (env *Env) registerRoutes(e *echo.Echo) {
 			return c.Stream(http.StatusOK, "audio/mp4", file)
 		}
 
+		database.UpdateEpisodePlaybackHistory(fileName[:len(fileName)-4], totalTimeSkipped)
 		rangeHeader := c.Request().Header.Get("Range")
 		if rangeHeader != "" {
-			http.ServeFile(c.Response().Writer, c.Request(), "/config/audio/"+fileId)
+			http.ServeFile(c.Response().Writer, c.Request(), "/config/audio/"+fileName)
 			return nil
 		}
 		return c.Stream(http.StatusOK, "audio/mp4", file)
-	})
-
-	e.HEAD("/media/:youtubeVideoId", func(c echo.Context) error {
-		fileId := c.Param("youtubeVideoId")
-		file, err := os.Open("/config/audio/" + fileId)
-		if file == nil || err != nil {
-			fileName, done := services.GetYoutubeVideo(fileId)
-			<-done
-			fileId = fileName
-			file, err := os.Open("/config/audio/" + fileName + ".m4a")
-			if err != nil || file == nil {
-				return err
-			}
-		}
-
-		fileInfo, err := file.Stat()
-		if err != nil {
-			return err
-		}
-
-		c.Response().Header().Set("Accept-Ranges", "bytes")
-		c.Response().Header().Set("Content-Type", "audio/mp4")
-		c.Response().Header().Set("Content-Length", strconv.Itoa(int(fileInfo.Size())))
-		return nil
 	})
 
 	port := os.Getenv("PORT")
@@ -119,6 +83,30 @@ func (env *Env) registerRoutes(e *echo.Echo) {
 	log.Info("Starting server on " + host + ": " + port)
 	e.Logger.Fatal(e.Start(host + ":" + port))
 
+}
+
+func setupCron() {
+	cronSchedule := "0 0 * * 0"
+	if os.Getenv("CRON") != "" {
+		cronSchedule = os.Getenv("CRON")
+	}
+	c := cron.New()
+	c.AddFunc(cronSchedule, func() {
+		database.DeletePodcastCronJob()
+	})
+	c.Start()
+}
+
+func setupLogging(e *echo.Echo) {
+	//custom logging to exclude showing the token from url
+	if os.Getenv("TOKEN") != "" {
+		logger := middleware.LoggerConfig{
+			Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","path":"${uri.Path}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
+		}
+		e.Use(middleware.LoggerWithConfig(logger))
+	} else {
+		e.Use(middleware.Logger())
+	}
 }
 
 func setupHandlers(e *echo.Echo) {
