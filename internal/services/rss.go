@@ -13,15 +13,15 @@ import (
 	log "github.com/labstack/gommon/log"
 )
 
-func GenerateRssFeed(podcast models.Podcast, appleData AppleResult, host string) []byte {
-	log.Debug("[RSS FEED] Generating RSS Feed with Youtube and Apple metadata")
+func GenerateRssFeed(podcast models.Podcast, host string) []byte {
+	log.Info("[RSS FEED] Generating RSS Feed with Youtube and Apple metadata")
 
 	now := time.Now()
-	ytPodcast := New(podcast.PodcastName, "https://www.youtube.com/playlist?list="+podcast.YoutubePodcastId, podcast.Description, &now)
+	ytPodcast := New(podcast.PodcastName, "https://www.youtube.com/playlist?list="+podcast.Id, podcast.Description, &now)
 	ytPodcast.AddImage(transformArtworkURL(podcast.ImageUrl, 1000, 1000))
 	ytPodcast.AddCategory(podcast.Category, []string{""})
 	ytPodcast.Docs = "http://www.rssboard.org/rss-specification"
-	ytPodcast.IAuthor = appleData.ArtistName
+	ytPodcast.IAuthor = podcast.ArtistName
 
 	if podcast.PodcastEpisodes != nil {
 		for _, podcastEpisode := range podcast.PodcastEpisodes {
@@ -79,14 +79,28 @@ func transformArtworkURL(artworkURL string, newHeight int, newWidth int) string 
 		return ""
 	}
 
+	log.Debug("[RSS FEED] Transforming image url...", artworkURL)
 	pathComponents := strings.Split(parsedURL.Path, "/")
 	lastComponent := pathComponents[len(pathComponents)-1]
-	newFilename := fmt.Sprintf("%dx%d%s", newHeight, newWidth, filepath.Ext(lastComponent))
+	ext := filepath.Ext(lastComponent)
+	if ext == "" {
+		log.Debug("[RSS FEED] No file extension found, returning original URL")
+		return artworkURL
+	}
+
+	newFilename := fmt.Sprintf("%dx%d%s", newHeight, newWidth, ext)
 	pathComponents[len(pathComponents)-1] = newFilename
 	newPath := strings.Join(pathComponents, "/")
 
-	newURL := parsedURL
-	newURL.Path = newPath
+	newURL := url.URL{
+		Scheme:   parsedURL.Scheme,
+		Host:     parsedURL.Host,
+		Path:     newPath,
+		RawQuery: parsedURL.RawQuery,
+		Fragment: parsedURL.Fragment,
+	}
+
+	log.Debug("[RSS FEED] New image url: ", newURL.String())
 
 	return newURL.String()
 }

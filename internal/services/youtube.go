@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"ikoyhn/podcast-sponsorblock/internal/database"
+	"ikoyhn/podcast-sponsorblock/internal/models"
 	"net/http"
 	"os"
 	"strings"
@@ -20,33 +22,19 @@ const youtubeVideoUrl = "https://www.youtube.com/watch?v="
 var youtubeVideoMutexes = &sync.Map{}
 
 // Get all youtube playlist items and meta data for the RSS feed
-func getYoutubeData(youtubePlaylistId string) []*youtube.PlaylistItem {
+func getYoutubePlaylistData(youtubePlaylistId string, service *youtube.Service) {
 
 	log.Info("[RSS FEED] Getting youtube data...")
-	ctx := context.Background()
-
-	apiKey := os.Getenv("GOOGLE_API_KEY")
-	if apiKey == "" {
-		log.Fatalf("GOOGLE_API_KEY is not set")
-	}
-
-	service, err := youtube.NewService(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		log.Errorf("Error creating new YouTube client: %v", err)
-		return nil
-	}
-	if service == nil {
-		log.Errorf("Failed to create YouTube service: %v", err)
-		return nil
-	}
 
 	continue_requesting_playlist_items := true
-	allItems := []*youtube.PlaylistItem{}
+	missingVideos := []models.PodcastEpisode{}
 	pageToken := "first_call"
 	for continue_requesting_playlist_items {
 		call := service.PlaylistItems.List([]string{"snippet", "status"}).
 			PlaylistId(youtubePlaylistId).
 			MaxResults(50)
+		call.Header().Set("order", "publishedAt desc")
+
 		if pageToken != "first_call" {
 			call.PageToken(pageToken)
 		}
@@ -57,34 +45,206 @@ func getYoutubeData(youtubePlaylistId string) []*youtube.PlaylistItem {
 		}
 		if response.HTTPStatusCode != http.StatusOK {
 			log.Errorf("YouTube API returned status code %v", response.HTTPStatusCode)
-			return nil
+			return
 		}
 
 		pageToken = response.NextPageToken
-		allItems = append(allItems, response.Items...)
+		for _, item := range response.Items {
+			exists, err := database.EpisodeExists(item.Snippet.ResourceId.VideoId, "PLAYLIST")
+			if err != nil {
+				log.Error(err)
+			}
+			if !exists {
+				cleanedVideo := cleanPlaylistItems(item)
+				if cleanedVideo != nil {
+					missingVideos = append(missingVideos, models.NewPodcastEpisode(cleanedVideo))
+				}
+			} else {
+				if len(missingVideos) > 0 {
+					database.SavePlaylistEpisodes(missingVideos)
+				}
+				return
+			}
+		}
 		if response.NextPageToken == "" {
 			continue_requesting_playlist_items = false
 		}
 	}
-	return allItems
+	if len(missingVideos) > 0 {
+		database.SavePlaylistEpisodes(missingVideos)
+	}
+}
+
+func getChannelData(channelIdentifier string, service *youtube.Service, isPlaylist bool) models.Podcast {
+	var channelCall *youtube.ChannelsListCall
+	var channelId string
+	dbPodcast := database.GetPodcast(channelIdentifier)
+
+	if dbPodcast == nil {
+		if isPlaylist {
+			playlistCall := service.Playlists.List([]string{"snippet", "status", "contentDetails"}).
+				Id(channelIdentifier)
+			playlistResponse, err := playlistCall.Do()
+			if err != nil {
+				log.Errorf("Error retrieving playlist details: %v", err)
+			}
+			if len(playlistResponse.Items) == 0 {
+				log.Errorf("Playlist not found")
+			}
+			playlist := playlistResponse.Items[0]
+			channelId = playlist.Snippet.ChannelId
+		} else {
+			channelId = channelIdentifier
+		}
+
+		channelCall = service.Channels.List([]string{"snippet", "statistics", "contentDetails"}).
+			Id(channelId)
+		channelResponse, err := channelCall.Do()
+		if err != nil {
+			log.Errorf("Error retrieving channel details: %v", err)
+		}
+		if len(channelResponse.Items) == 0 {
+			log.Errorf("Channel not found")
+		}
+		channel := channelResponse.Items[0]
+
+		imageUrl := ""
+		if channel.Snippet.Thumbnails.Maxres != nil {
+			imageUrl = channel.Snippet.Thumbnails.Maxres.Url
+		} else if channel.Snippet.Thumbnails.Standard != nil {
+			imageUrl = channel.Snippet.Thumbnails.Standard.Url
+		} else if channel.Snippet.Thumbnails.High != nil {
+			imageUrl = channel.Snippet.Thumbnails.High.Url
+		} else if channel.Snippet.Thumbnails.Default != nil {
+			imageUrl = channel.Snippet.Thumbnails.Default.Url
+		}
+
+		dbPodcast = &models.Podcast{
+			Id:              channel.Id,
+			PodcastName:     channel.Snippet.Title,
+			Description:     channel.Snippet.Description,
+			ImageUrl:        imageUrl,
+			PostedDate:      channel.Snippet.PublishedAt,
+			PodcastEpisodes: []models.PodcastEpisode{},
+			ArtistName:      channel.Snippet.Title,
+			Explicit:        "false",
+		}
+
+		dbPodcast.LastBuildDate = time.Now().Format(time.RFC1123)
+		database.SavePodcast(dbPodcast)
+	}
+
+	return *dbPodcast
+}
+func getChannelMetadataAndVideos(channelID string, service *youtube.Service) {
+	log.Info("[RSS FEED] Getting channel data...")
+
+	channelCall := service.Channels.List([]string{"snippet", "statistics", "contentDetails"})
+	channelCall = channelCall.Id(channelID)
+
+	channelResponse, err := channelCall.Do()
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	if len(channelResponse.Items) == 0 {
+		log.Error("channel not found")
+		return
+	}
+
+	missingVideos := []models.PodcastEpisode{}
+	nextPageToken := ""
+	for {
+		videoCall := service.Search.List([]string{"id,snippet"})
+		videoCall = videoCall.ChannelId(channelID)
+		videoCall = videoCall.Order("date")
+		videoCall = videoCall.MaxResults(50)
+		videoCall = videoCall.PageToken(nextPageToken)
+
+		videoResponse, err := videoCall.Do()
+		if err != nil {
+			log.Error(err)
+			return
+		}
+
+		for _, item := range videoResponse.Items {
+			if item.Id.Kind == "youtube#video" {
+				videoCall := service.Videos.List([]string{"id,snippet,contentDetails"})
+				videoCall = videoCall.Id(item.Id.VideoId)
+
+				videoResponse, err := videoCall.Do()
+				if err != nil {
+					log.Error(err)
+					continue
+				}
+
+				if len(videoResponse.Items) > 0 {
+					durationStr := videoResponse.Items[0].ContentDetails.Duration
+					duration, err := ParseDuration(durationStr)
+					if err != nil {
+						log.Error(err)
+						continue
+					}
+
+					if duration.Seconds() >= 65 {
+						exists, err := database.EpisodeExists(item.Id.VideoId, "CHANNEL")
+						if err != nil {
+							log.Error(err)
+						}
+						if !exists {
+							if item.Id.VideoId != "" {
+								missingVideos = append(missingVideos, models.NewPodcastEpisodeFromSearch(item))
+							}
+
+						} else {
+							if len(missingVideos) > 0 {
+								database.SavePlaylistEpisodes(missingVideos)
+							}
+							return
+						}
+					}
+				}
+			}
+		}
+
+		if videoResponse.NextPageToken == "" {
+			break
+		}
+		nextPageToken = videoResponse.NextPageToken
+	}
+	if len(missingVideos) > 0 {
+		database.SavePlaylistEpisodes(missingVideos)
+	}
+}
+
+func ParseDuration(durationStr string) (time.Duration, error) {
+	// Remove the 'PT' prefix from the duration string
+	durationStr = strings.Replace(durationStr, "PT", "", 1)
+
+	// Replace 'H' with 'h', 'M' with 'm', and 'S' with 's'
+	durationStr = strings.Replace(durationStr, "H", "h", 1)
+	durationStr = strings.Replace(durationStr, "M", "m", 1)
+	durationStr = strings.Replace(durationStr, "S", "s", 1)
+
+	// Parse the duration string
+	return time.ParseDuration(durationStr)
 }
 
 // Remove unavailable youtube videos used during the RSS feed generation
-func cleanPlaylistItems(items []*youtube.PlaylistItem) []*youtube.PlaylistItem {
+func cleanPlaylistItems(item *youtube.PlaylistItem) *youtube.PlaylistItem {
 	unavailableStatuses := map[string]bool{
 		"private":                  true,
 		"unlisted":                 true,
 		"privacyStatusUnspecified": true,
 	}
-	cleanItems := make([]*youtube.PlaylistItem, 0)
-	for _, item := range items {
-		if item.Status != nil {
-			if !unavailableStatuses[item.Status.PrivacyStatus] {
-				cleanItems = append(cleanItems, item)
-			}
+	if item.Status != nil {
+		if !unavailableStatuses[item.Status.PrivacyStatus] {
+			return item
 		}
 	}
-	return cleanItems
+
+	return nil
 }
 
 func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
@@ -153,4 +313,21 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 	}()
 
 	return youtubeVideoId, done
+}
+
+func setupYoutubeService() *youtube.Service {
+	apiKey := os.Getenv("GOOGLE_API_KEY")
+	if apiKey == "" {
+		log.Fatalf("GOOGLE_API_KEY is not set")
+	}
+
+	ctx := context.Background()
+	service, err := youtube.NewService(ctx, option.WithAPIKey(apiKey))
+	if err != nil {
+		log.Errorf("Error creating new YouTube client: %v", err)
+	}
+	if service == nil {
+		log.Errorf("Failed to create YouTube service: %v", err)
+	}
+	return service
 }
