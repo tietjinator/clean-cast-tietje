@@ -23,7 +23,8 @@ import (
 )
 
 func Start() {
-	ytdlp.MustInstall(context.TODO(), nil)
+	// Disable auto-install — we’re providing yt-dlp manually
+        // go_ytdlp.MustInstall()
 	e := echo.New()
 
 	database.SetupDatabase()
