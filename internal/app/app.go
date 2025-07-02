@@ -22,7 +22,7 @@ import (
 
 func Start() {
 	// Disable auto-install — we’re providing yt-dlp manually
-        // go_ytdlp.MustInstall()
+	// go_ytdlp.MustInstall()
 	e := echo.New()
 
 	database.SetupDatabase()
@@ -94,6 +94,11 @@ func registerRoutes(e *echo.Echo) {
 		return c.Stream(http.StatusOK, "audio/mp4", file)
 	})
 
+	// Handle HEAD / (used by podcast clients like Pocket Casts)
+	e.HEAD("/", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -102,7 +107,6 @@ func registerRoutes(e *echo.Echo) {
 
 	log.Info("Starting server on " + host + ": " + port)
 	e.Logger.Fatal(e.Start(host + ":" + port))
-
 }
 
 func validateQueryParams(c echo.Context) *models.RssRequestParams {
@@ -157,7 +161,6 @@ func setupCron() {
 }
 
 func setupLogging(e *echo.Echo) {
-	//custom logging to exclude showing the token from url
 	if os.Getenv("TOKEN") != "" {
 		logger := middleware.LoggerConfig{
 			Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}","method":"${method}","path":"${uri.Path}","user_agent":"${user_agent}","status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}","bytes_in":${bytes_in},"bytes_out":${bytes_out}}`,
