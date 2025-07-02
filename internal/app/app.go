@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"ikoyhn/podcast-sponsorblock/internal/database"
 	"ikoyhn/podcast-sponsorblock/internal/models"
 	"ikoyhn/podcast-sponsorblock/internal/services/common"
@@ -18,7 +17,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	log "github.com/labstack/gommon/log"
-	"github.com/lrstanley/go-ytdlp"
 	"github.com/robfig/cron"
 )
 
