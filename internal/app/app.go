@@ -71,7 +71,7 @@ func registerRoutes(e *echo.Echo) {
 			database.UpdateEpisodePlaybackHistory(fileName[:len(fileName)-4], totalTimeSkipped)
 			fileName, done := downloader.GetYoutubeVideo(fileName)
 			<-done
-			file, err = os.Open("/config/audio/" + fileName + ".m4a")
+			file, err = os.Open("/config/audio/" + fileName + ".mp3")
 			if err != nil || file == nil {
 				return err
 			}
@@ -79,10 +79,10 @@ func registerRoutes(e *echo.Echo) {
 
 			rangeHeader := c.Request().Header.Get("Range")
 			if rangeHeader != "" {
-				http.ServeFile(c.Response().Writer, c.Request(), "/config/audio/"+fileName+".m4a")
+				http.ServeFile(c.Response().Writer, c.Request(), "/config/audio/"+fileName+".mp3")
 				return nil
 			}
-			return c.Stream(http.StatusOK, "audio/mp4", file)
+			return c.Stream(http.StatusOK, "audio/mpeg", file)
 		}
 
 		database.UpdateEpisodePlaybackHistory(fileName[:len(fileName)-4], totalTimeSkipped)
@@ -91,7 +91,7 @@ func registerRoutes(e *echo.Echo) {
 			http.ServeFile(c.Response().Writer, c.Request(), "/config/audio/"+fileName)
 			return nil
 		}
-		return c.Stream(http.StatusOK, "audio/mp4", file)
+		return c.Stream(http.StatusOK, "audio/mpeg", file)
 	})
 
 	// Handle HEAD / (used by podcast clients like Pocket Casts)

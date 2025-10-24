@@ -87,7 +87,7 @@ func DeletePodcastCronJob() {
 	db.Where("last_access_date < ?", oneWeekAgo).Find(&histories)
 
 	for _, history := range histories {
-		err := os.Remove("/config/audio/" + history.YoutubeVideoId + ".m4a")
+		err := os.Remove("/config/audio/" + history.YoutubeVideoId + ".mp3")
 		if err != nil {
 			return
 		}

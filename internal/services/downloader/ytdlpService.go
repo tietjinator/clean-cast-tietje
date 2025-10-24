@@ -26,14 +26,14 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 	mutex.(*sync.Mutex).Lock()
 
 	// Check if the file is already being processed
-	filePath := "/config/audio/" + youtubeVideoId + ".m4a"
+	filePath := "/config/audio/" + youtubeVideoId + ".mp3"
 	if _, err := os.Stat(filePath); err == nil {
 		mutex.(*sync.Mutex).Unlock()
 		return youtubeVideoId, make(chan struct{})
 	}
 
 	// If not, proceed with the download
-	youtubeVideoId = strings.TrimSuffix(youtubeVideoId, ".m4a")
+	youtubeVideoId = strings.TrimSuffix(youtubeVideoId, ".mp3")
 	ytdlp.Install(context.TODO(), nil)
 
 	categories := os.Getenv("SPONSORBLOCK_CATEGORIES")
@@ -44,9 +44,9 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 
 	dl := ytdlp.New().
 		NoProgress().
-		FormatSort("ext::m4a").
-		SponsorblockRemove(categories).
 		ExtractAudio().
+		AudioFormat("mp3").
+		SponsorblockRemove(categories).
 		NoPlaylist().
 		FFmpegLocation("/usr/bin/ffmpeg").
 		Continue().
@@ -69,12 +69,17 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 
 	done := make(chan struct{})
 	go func() {
+		log.Infof("[DOWNLOADER] Starting download for video: %s", youtubeVideoId)
 		r, err := dl.Run(context.TODO(), youtubeVideoUrl+youtubeVideoId)
 		if err != nil {
-			log.Errorf("Error downloading YouTube video: %v", err)
+			log.Errorf("[DOWNLOADER] Error downloading YouTube video %s: %v", youtubeVideoId, err)
 		}
 		if r.ExitCode != 0 {
-			log.Errorf("YouTube video download failed with exit code %d", r.ExitCode)
+			log.Errorf("[DOWNLOADER] YouTube video %s download failed with exit code %d", youtubeVideoId, r.ExitCode)
+			log.Errorf("[DOWNLOADER] Stdout: %s", r.Stdout)
+			log.Errorf("[DOWNLOADER] Stderr: %s", r.Stderr)
+		} else {
+			log.Infof("[DOWNLOADER] Successfully downloaded video: %s", youtubeVideoId)
 		}
 		mutex.(*sync.Mutex).Unlock()
 
