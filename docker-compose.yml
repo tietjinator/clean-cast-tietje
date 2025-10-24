@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  cleancast:
+    # Use the official upstream image (recommended)
+    image: ikoyhn/clean-cast:latest
+
+    # Or build from your fork (uncomment to use your changes)
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+
+    container_name: cleancast
+
+    ports:
+      - "8080:8080"  # Change 8080 to your preferred port if needed
+
+    environment:
+      # REQUIRED: Your YouTube API v3 key
+      # Get one here: https://developers.google.com/youtube/v3/getting-started
+      - GOOGLE_API_KEY=YOUR_API_KEY_HERE
+
+      # OPTIONAL: Security token for authentication
+      # If set, you must add ?token=YOUR_TOKEN to all RSS feed URLs
+      # - TOKEN=your_secure_token_here
+
+      # OPTIONAL: Trusted hosts (comma-separated)
+      # - TRUSTED_HOSTS=localhost:8080,podcast.example.com
+
+      # OPTIONAL: Cron schedule for cleanup (default: weekly on Sunday midnight)
+      # Deletes episode files not accessed in over a week
+      - CRON=0 0 * * 0
+
+      # OPTIONAL: SponsorBlock categories to remove (comma-separated)
+      # Options: sponsor,selfpromo,interaction,intro,outro,preview,music_offtopic,filler
+      - SPONSORBLOCK_CATEGORIES=sponsor,selfpromo,intro,outro
+
+      # OPTIONAL: Minimum video duration to include (filters out shorts)
+      # Default: 3m. Examples: 30s, 5m, 1h
+      - MIN_DURATION=3m
+
+      # OPTIONAL: Cookies file name (for age-restricted or members-only videos)
+      # Place the cookies.txt file in /config/ directory first
+      # - COOKIES_FILE=cookies.txt
+
+      # OPTIONAL: Custom config directory (default: /config)
+      # - CONFIG_DIR=/config
+
+    volumes:
+      # Mount path for audio files and database
+      # Change the left side to your UNRAID path
+      - /mnt/user/appdata/cleancast:/config
+
+    restart: unless-stopped
+
+    # Optional: Set timezone
+    # environment:
+    #   - TZ=America/New_York
