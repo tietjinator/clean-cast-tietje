@@ -2,10 +2,10 @@ package youtube
 
 import (
 	"context"
+	"ikoyhn/podcast-sponsorblock/internal/config"
 	"ikoyhn/podcast-sponsorblock/internal/database"
 	"ikoyhn/podcast-sponsorblock/internal/models"
 	"ikoyhn/podcast-sponsorblock/internal/services/common"
-	"os"
 	"time"
 
 	log "github.com/labstack/gommon/log"
@@ -86,6 +86,11 @@ func GetVideoAndValidate(service *ytApi.Service, videoIdsNotSaved []string, miss
 		return nil
 	}
 
+	dur, err := time.ParseDuration(config.Config.MinDuration)
+	if err != nil {
+		panic("Invalid MIN_DURATION format. Use formats like '5m', '1h', '400s'.")
+	}
+
 	for _, item := range videoResponse.Items {
 		if item.Id != "" {
 			duration, err := common.ParseDuration(item.ContentDetails.Duration)
@@ -93,7 +98,8 @@ func GetVideoAndValidate(service *ytApi.Service, videoIdsNotSaved []string, miss
 				log.Error(err)
 				continue
 			}
-			if duration.Seconds() > 1000 {
+
+			if duration.Seconds() > dur.Seconds() {
 				if database.IsEpisodeSaved(item) {
 					return missingVideos
 				}
@@ -122,7 +128,7 @@ func FindChannel(channelID string, service *ytApi.Service) bool {
 		}
 
 		if len(channelResponse.Items) == 0 {
-			log.Fatal("channel not found")
+			log.Error("channel not found")
 			return false
 		}
 	}
@@ -130,11 +136,7 @@ func FindChannel(channelID string, service *ytApi.Service) bool {
 }
 
 func SetupYoutubeService() *ytApi.Service {
-	apiKey := os.Getenv("GOOGLE_API_KEY")
-	if apiKey == "" {
-		log.Fatalf("GOOGLE_API_KEY is not set")
-	}
-
+	apiKey := config.Config.GoogleApiKey
 	ctx := context.Background()
 	service, err := ytApi.NewService(ctx, option.WithAPIKey(apiKey))
 	if err != nil {

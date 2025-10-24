@@ -2,6 +2,7 @@ package sponsorblock
 
 import (
 	"encoding/json"
+	"ikoyhn/podcast-sponsorblock/internal/config"
 	"ikoyhn/podcast-sponsorblock/internal/database"
 	"io"
 	"math"
@@ -23,7 +24,7 @@ func DeterminePodcastDownload(youtubeVideoId string) (bool, float64) {
 	}
 
 	if math.Abs(episodeHistory.TotalTimeSkipped-updatedSkippedTime) > 2 {
-		os.Remove("/config/audio/" + youtubeVideoId + ".mp3")
+		os.Remove(config.Config.AudioDir + youtubeVideoId + ".m4a")
 		log.Debug("[SponsorBlock] Updating downloaded episode with new sponsor skips...")
 		return true, updatedSkippedTime
 	}
@@ -100,11 +101,10 @@ func calculateSkippedTime(segments []SponsorBlockResponse) float64 {
 }
 
 func getCategories() []string {
-	categories := os.Getenv("SPONSORBLOCK_CATEGORIES")
-	if categories == "" {
+	if config.Config.SponsorBlockCategories == "" {
 		return nil
 	}
-	return strings.Split(categories, ",")
+	return strings.Split(config.Config.SponsorBlockCategories, ",")
 }
 
 type SponsorBlockResponse struct {

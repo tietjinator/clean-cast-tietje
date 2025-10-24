@@ -3,7 +3,9 @@ package downloader
 import (
 	"context"
 	"fmt"
+	"ikoyhn/podcast-sponsorblock/internal/config"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -26,17 +28,17 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 	mutex.(*sync.Mutex).Lock()
 
 	// Check if the file is already being processed
-	filePath := "/config/audio/" + youtubeVideoId + ".mp3"
+	filePath := config.Config.AudioDir + youtubeVideoId + ".m4a"
 	if _, err := os.Stat(filePath); err == nil {
 		mutex.(*sync.Mutex).Unlock()
 		return youtubeVideoId, make(chan struct{})
 	}
 
 	// If not, proceed with the download
-	youtubeVideoId = strings.TrimSuffix(youtubeVideoId, ".mp3")
+	youtubeVideoId = strings.TrimSuffix(youtubeVideoId, ".m4a")
 	ytdlp.Install(context.TODO(), nil)
 
-	categories := os.Getenv("SPONSORBLOCK_CATEGORIES")
+	categories := config.Config.SponsorBlockCategories
 	if categories == "" {
 		categories = "sponsor"
 	}
@@ -44,13 +46,13 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 
 	dl := ytdlp.New().
 		NoProgress().
-		ExtractAudio().
-		AudioFormat("mp3").
+		FormatSort("ext::m4a[format_note*=original]").
 		SponsorblockRemove(categories).
+		ExtractAudio().
 		NoPlaylist().
 		FFmpegLocation("/usr/bin/ffmpeg").
 		Continue().
-		Paths("/config/audio").
+		Paths(config.Config.AudioDir).
 		ProgressFunc(500*time.Millisecond, func(prog ytdlp.ProgressUpdate) {
 			fmt.Printf(
 				"%s @ %s [eta: %s] :: %s\n",
@@ -62,24 +64,25 @@ func GetYoutubeVideo(youtubeVideoId string) (string, <-chan struct{}) {
 		}).
 		Output(youtubeVideoId + ".%(ext)s")
 
-	cookiesFile := strings.TrimSpace(os.Getenv("COOKIES_FILE"))
-	if cookiesFile != "" {
-		dl.Cookies("/config/" + cookiesFile)
+	if config.Config.CookiesFile != "" {
+		dl.Cookies(config.Config.CookiesFile)
 	}
 
 	done := make(chan struct{})
 	go func() {
-		log.Infof("[DOWNLOADER] Starting download for video: %s", youtubeVideoId)
-		r, err := dl.Run(context.TODO(), youtubeVideoUrl+youtubeVideoId)
-		if err != nil {
-			log.Errorf("[DOWNLOADER] Error downloading YouTube video %s: %v", youtubeVideoId, err)
-		}
+		r, dlErr := dl.Run(context.TODO(), youtubeVideoUrl+youtubeVideoId)
+
 		if r.ExitCode != 0 {
-			log.Errorf("[DOWNLOADER] YouTube video %s download failed with exit code %d", youtubeVideoId, r.ExitCode)
-			log.Errorf("[DOWNLOADER] Stdout: %s", r.Stdout)
-			log.Errorf("[DOWNLOADER] Stderr: %s", r.Stderr)
+			file, err := os.Open(path.Join(config.Config.AudioDir, youtubeVideoId+".m4a"))
+			if file != nil || err == nil {
+				log.Warn("Download exited with non-zero code, but file exists: ", filePath)
+			} else {
+				if dlErr != nil {
+					log.Errorf("Error downloading YouTube video: %v", dlErr)
+				}
+			}
 		} else {
-			log.Infof("[DOWNLOADER] Successfully downloaded video: %s", youtubeVideoId)
+			log.Infof(" %w Download completed successfully.", youtubeVideoId)
 		}
 		mutex.(*sync.Mutex).Unlock()
 
